@@ -1,0 +1,44 @@
+[package]
+name = "test-firmware"
+description = "Nucleo-F446RE firmware exercising defmt-monitor on real hardware"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Its own workspace: this crate builds for thumbv7em-none-eabihf with linker flags that
+# must not leak into the host crates.
+[workspace]
+
+[dependencies]
+defmt = "1"
+defmt-rtt = "1"
+defmt-monitor = { path = "../defmt-monitor" }
+
+cortex-m = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7"
+panic-probe = { version = "1", features = ["print-defmt"] }
+
+embassy-executor = { version = "0.10", features = [
+    "platform-cortex-m",
+    "executor-thread",
+    "defmt",
+] }
+embassy-stm32 = { version = "0.6", features = [
+    "stm32f446re",
+    "defmt",
+    "memory-x",
+    "time-driver-any",
+] }
+# `defmt-timestamp-uptime-us` defines the once-per-binary `defmt::timestamp!` as
+# `{=u64:us}`, which is what gives the monitor TUI a device clock for its graphs.
+embassy-time = { version = "0.5", features = ["defmt", "defmt-timestamp-uptime-us"] }
+
+# defmt needs debug info to resolve frames, and embassy needs optimisation even in dev.
+[profile.dev]
+opt-level = "s"
+debug = 2
+
+[profile.release]
+opt-level = "s"
+debug = 2
+lto = "fat"

@@ -1,0 +1,20 @@
+[package]
+name = "defmt-monitor-tui"
+description = "Terminal monitor for values published by firmware using defmt-monitor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+defmt-decoder = "1.1"
+defmt-monitor = { workspace = true }
+ratatui = "0.30"
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
+tui-tree-widget = "0.24"
+probe-rs = { version = "0.32", optional = true }
+
+[features]
+default = ["probe"]
+probe = ["dep:probe-rs"]

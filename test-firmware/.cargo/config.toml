@@ -1,0 +1,19 @@
+[env]
+# Required, not optional. defmt's compile-time filter defaults to ERROR when DEFMT_LOG
+# is unset, which silently compiles away every `info!` — including every `monitor!`
+# call, leaving the TUI with an empty topic tree and no error anywhere.
+DEFMT_LOG = "trace"
+
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.thumbv7em-none-eabihf]
+# `cargo run` flashes and streams logs the usual way. To watch the monitor topics
+# instead, run defmt-monitor-tui against the same ELF.
+#runner = "probe-rs run --chip STM32F446RETx"
+runner = "defmt-monitor-tui --chip STM32F446RETx"
+rustflags = [
+    "-C", "link-arg=--nmagic",
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Tdefmt.x",
+]

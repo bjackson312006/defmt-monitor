@@ -1,0 +1,17 @@
+[package]
+name = "defmt-monitor-macros"
+description = "Proc macro implementation for defmt-monitor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "3", features = ["full"] }
+
+[features]
+level-error = []

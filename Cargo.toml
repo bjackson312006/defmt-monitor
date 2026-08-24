@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["defmt-monitor", "defmt-monitor-macros", "defmt-monitor-tui"]
+# Cross-compiled firmware: its own workspace, so its target and linker flags stay out
+# of the host crates. Build it from inside test-firmware/.
+exclude = ["test-firmware"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+defmt = "1"
+defmt-monitor = { version = "0.1.0", path = "defmt-monitor" }
+defmt-monitor-macros = { version = "0.1.0", path = "defmt-monitor-macros" }
