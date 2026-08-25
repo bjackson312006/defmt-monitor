@@ -23,22 +23,46 @@ async fn main(_spawner: Spawner) {
     let _p = embassy_stm32::init(Default::default());
     defmt::info!("nucleo-f446re up, publishing counters every {} ms", PERIOD.as_millis());
 
-    let mut increasing: i32 = 0;
-    let mut decreasing: i32 = 0;
+    let mut increasing_1x: i32 = 0;
+    let mut increasing_2x: i32 = 0;
+    let mut increasing_4x: i32 = 0;
+    let mut increasing_8x: i32 = 0;
+
+    let mut decreasing_1x: i32 = 0;
+    let mut decreasing_2x: i32 = 0;
+    let mut decreasing_4x: i32 = 0;
+    let mut decreasing_8x: i32 = 0;
+
     let mut ticks: u32 = 0;
 
     loop {
-        defmt_monitor::monitor!("Counters/Increasing", "{=i32}", increasing);
-        defmt_monitor::monitor!("Counters/Decreasing", "{=i32}", decreasing);
+        // increasing
+        defmt_monitor::monitor!("Counters/Increasing/Increasing1x", "{=i32}", increasing_1x);
+        defmt_monitor::monitor!("Counters/Increasing/Increasing2x", "{=i32}", increasing_2x);
+        defmt_monitor::monitor!("Counters/Increasing/Increasing4x", "{=i32}", increasing_4x);
+        defmt_monitor::monitor!("Counters/Increasing/Increasing8x", "{=i32}", increasing_8x);
+        
+        // decreasing
+        defmt_monitor::monitor!("Counters/Decreasing/Decreasing1x", "{=i32}", decreasing_1x);
+        defmt_monitor::monitor!("Counters/Decreasing/Decreasing2x", "{=i32}", decreasing_2x);
+        defmt_monitor::monitor!("Counters/Decreasing/Decreasing4x", "{=i32}", decreasing_4x);
+        defmt_monitor::monitor!("Counters/Decreasing/Decreasing8x", "{=i32}", decreasing_8x);
 
-        // An ordinary log every few seconds, so the TUI's Logs tab has traffic to show
-        // and it is visible that monitor frames are being kept out of it.
+        // this prints an ordinary defmt log every loop for the purposes of testing the logging page
         if ticks % 50 == 0 {
             defmt::info!("heartbeat: {} samples published", ticks);
         }
 
-        increasing = increasing.wrapping_add(1);
-        decreasing = decreasing.wrapping_sub(1);
+        increasing_1x += 1;
+        increasing_2x += 2;
+        increasing_4x += 4;
+        increasing_8x += 8;
+
+        decreasing_1x -= 1;
+        decreasing_2x -= 2;
+        decreasing_4x -= 4;
+        decreasing_8x -= 8;
+
         ticks = ticks.wrapping_add(1);
         Timer::after(PERIOD).await;
     }

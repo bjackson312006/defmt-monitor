@@ -5,7 +5,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use defmt_decoder::{DecodeError, Locations, Table};
 use probe_rs::flashing::{ElfLoader, ElfOptions, download_file};
 use probe_rs::rtt::Rtt;
@@ -105,6 +105,7 @@ fn run(config: &Config, tx: &Sender<SourceEvent>) -> Result<()> {
     let _ = tx.send(SourceEvent::Ready(format!("attached (RTT channel {channel})")));
 
     let mut stream = table.new_stream_decoder();
+    let mut health = DecodeHealth::default();
     let mut buf = [0u8; 4096];
     let attached_at = Instant::now();
     let mut seen_data = false;
@@ -130,6 +131,7 @@ fn run(config: &Config, tx: &Sender<SourceEvent>) -> Result<()> {
         loop {
             match stream.decode() {
                 Ok(frame) => {
+                    health.record_ok();
                     let location = locations.as_ref().and_then(|l| describe(l, frame.index()));
                     let event = route(DecodedFrame {
                         message: frame.display_message().to_string(),
@@ -144,12 +146,48 @@ fn run(config: &Config, tx: &Sender<SourceEvent>) -> Result<()> {
                 }
                 Err(DecodeError::UnexpectedEof) => break,
                 Err(DecodeError::Malformed) => {
-                    // A malformed frame means the stream is desynchronised, usually
-                    // because the ELF does not match the running firmware.
-                    bail!("malformed defmt frame — does the ELF match what is flashed?");
+                    // Recoverable: the decoder has already discarded the bad frame and
+                    // will resynchronise at the next separator. Only complain once the
+                    // failures stop looking like startup noise.
+                    if let Some(warning) = health.record_malformed() {
+                        status(warning);
+                    }
                 }
             }
         }
+    }
+}
+
+/// Distinguishes recoverable decode noise from a genuine firmware/ELF mismatch.
+///
+/// A malformed frame is not fatal: the rzCOBS decoder discards it and resynchronises at
+/// the next separator byte. A few at startup are expected, because `defmt-rtt` keeps its
+/// control block in `.uninit` so it survives the reset — the first read can therefore
+/// contain the tail of a frame written before the new firmware was flashed. Only a run
+/// of failures with nothing successfully decoded points at the wrong ELF.
+#[derive(Default)]
+struct DecodeHealth {
+    decoded: u64,
+    malformed: u64,
+    warned: bool,
+}
+
+impl DecodeHealth {
+    /// Failures tolerated before startup noise stops being a plausible explanation.
+    const STARTUP_TOLERANCE: u64 = 16;
+
+    fn record_ok(&mut self) {
+        self.decoded += 1;
+    }
+
+    /// Returns a status message the first time the failures look like a real mismatch.
+    fn record_malformed(&mut self) -> Option<&'static str> {
+        self.malformed += 1;
+        if self.warned || self.decoded > 0 || self.malformed < Self::STARTUP_TOLERANCE {
+            return None;
+        }
+        self.warned = true;
+        Some("malformed frames, nothing decoded — does the ELF match what is flashed?")
     }
 }
 
@@ -160,4 +198,39 @@ fn describe(locations: &Locations, index: u64) -> Option<String> {
         location.file.display(),
         location.line
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DecodeHealth;
+
+    #[test]
+    fn a_few_malformed_frames_at_startup_are_tolerated() {
+        let mut health = DecodeHealth::default();
+        for _ in 0..DecodeHealth::STARTUP_TOLERANCE - 1 {
+            assert_eq!(health.record_malformed(), None);
+        }
+    }
+
+    #[test]
+    fn sustained_failures_with_nothing_decoded_are_reported_once() {
+        let mut health = DecodeHealth::default();
+        let mut warnings = 0;
+        for _ in 0..100 {
+            warnings += usize::from(health.record_malformed().is_some());
+        }
+        assert_eq!(warnings, 1, "the status should be set once, not spammed");
+    }
+
+    #[test]
+    fn stale_frames_before_a_good_one_never_warn() {
+        // The real startup case: leftover bytes from before the reset, then the new
+        // firmware's frames decode fine.
+        let mut health = DecodeHealth::default();
+        assert_eq!(health.record_malformed(), None);
+        health.record_ok();
+        for _ in 0..100 {
+            assert_eq!(health.record_malformed(), None, "occasional noise is not a mismatch");
+        }
+    }
 }
