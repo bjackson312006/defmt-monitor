@@ -32,6 +32,9 @@ fn key_press(key: KeyEvent, app: &mut App, ui: &mut UiState) -> bool {
                 Tab::Logs => Tab::Monitor,
             };
         }
+        // Releasing mouse capture hands click-drag back to the terminal, which is the
+        // only way to use its native selection and copy.
+        KeyCode::Char('m') => ui.mouse_capture = !ui.mouse_capture,
         KeyCode::Char('f') => match app.tab {
             Tab::Monitor => {
                 ui.history_follow = !ui.history_follow;

@@ -124,8 +124,19 @@ fn run(
     // Done once only: after this the selection belongs to the user, and re-selecting
     // under them would fight their navigation.
     let mut bootstrapped = false;
+    // Mirrors the terminal's actual state so the escape sequence is only sent on change.
+    let mut mouse_capture = true;
 
     loop {
+        if ui.mouse_capture != mouse_capture {
+            if ui.mouse_capture {
+                execute!(stdout(), EnableMouseCapture)?;
+            } else {
+                execute!(stdout(), DisableMouseCapture)?;
+            }
+            mouse_capture = ui.mouse_capture;
+        }
+
         drain(rx, app);
 
         if !bootstrapped {

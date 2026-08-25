@@ -520,3 +520,59 @@ fn ready_replaces_the_loading_screen_with_the_panes() {
     assert!(frame.contains("Topics ("), "normal UI should take over:\n{frame}");
     assert!(!frame.contains("Connecting"));
 }
+
+/// A log entry longer than the pane must wrap onto further rows rather than being cut
+/// off, the way a normal console behaves.
+#[test]
+fn long_log_entries_wrap_instead_of_truncating() {
+    let mut app = App::new(UtcOffset::UTC, 2000, 5000);
+    app.startup.ready();
+    app.tab = Tab::Logs;
+    let mut ui = UiState::default();
+
+    // Long enough to need several rows at 110 columns, with a distinctive tail.
+    let message = format!("i2c transaction failed: {} END-OF-MESSAGE", "0xdeadbeef ".repeat(12));
+    if let SourceEvent::Log(line) = route(DecodedFrame {
+        message,
+        timestamp: Some("00:00:01.000".into()),
+        level: Some("ERROR".into()),
+        location: Some("src/imu.rs:118".into()),
+    }) {
+        app.push_log(*line);
+    }
+
+    let frame = render(&mut app, &mut ui);
+    println!("\n=== Wrapped log entry ===\n{frame}");
+
+    assert!(frame.contains("i2c transaction failed"), "start of the entry is missing");
+    assert!(
+        frame.contains("END-OF-MESSAGE"),
+        "the tail was truncated instead of wrapping:\n{frame}"
+    );
+    assert!(
+        frame.contains("src/imu.rs:118"),
+        "the location, which comes after the message, was lost:\n{frame}"
+    );
+}
+
+/// Releasing mouse capture is what gives the terminal its native selection back, so the
+/// key has to actually flip the flag the event loop watches.
+#[test]
+fn m_toggles_mouse_capture() {
+    use ratatui::crossterm::event::KeyCode;
+
+    let mut app = populated();
+    let mut ui = UiState::default();
+    assert!(ui.mouse_capture, "capture is on by default");
+
+    press(KeyCode::Char('m'), &mut app, &mut ui);
+    assert!(!ui.mouse_capture);
+    let frame = render(&mut app, &mut ui);
+    assert!(
+        frame.contains("mouse capture released"),
+        "the footer must say why the mouse stopped working:\n{frame}"
+    );
+
+    press(KeyCode::Char('m'), &mut app, &mut ui);
+    assert!(ui.mouse_capture);
+}

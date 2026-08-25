@@ -10,7 +10,11 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 defmt-decoder = "1.1"
 defmt-monitor = { workspace = true }
-ratatui = "0.30"
+# `unstable-rendered-line-info` exposes `Paragraph::line_count`, which the log pane needs
+# to know how many rows a wrapped entry occupies. Measuring it ourselves would mean
+# reimplementing ratatui's word wrapping and drifting from it; if the API changes this
+# breaks at compile time rather than silently mis-scrolling.
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tui-tree-widget = "0.24"
 probe-rs = { version = "0.32", optional = true }

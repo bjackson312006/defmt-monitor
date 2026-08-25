@@ -14,7 +14,7 @@ use ratatui::widgets::{
 use time::UtcOffset;
 use tui_tree_widget::{Tree, TreeItem, TreeState};
 
-use crate::model::{App, Tab, Topic};
+use crate::model::{App, LogLine, Tab, Topic};
 
 const ACCENT: Color = Color::Green;
 const DIM: Color = Color::DarkGray;
@@ -54,6 +54,9 @@ pub struct UiState {
     pub log_view: usize,
     pub log_follow: bool,
     pub hit: Hit,
+    /// When false, mouse capture is released so the terminal's own click-drag selection
+    /// works. Applied by the event loop, which owns the terminal.
+    pub mouse_capture: bool,
 }
 
 impl Default for UiState {
@@ -72,6 +75,7 @@ impl Default for UiState {
             log_view: 0,
             log_follow: true,
             hit: Hit::default(),
+            mouse_capture: true,
         }
     }
 }
@@ -123,7 +127,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, ui: &mut UiState) {
         Tab::Monitor => draw_monitor(frame, chunks[2], app, ui),
         Tab::Logs => draw_logs(frame, chunks[2], app, ui),
     }
-    draw_footer(frame, chunks[3], app);
+    draw_footer(frame, chunks[3], app, ui);
 }
 
 /// The centred loading screen shown until the source reports itself ready.
@@ -265,15 +269,24 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App, ui: &UiState) {
     );
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let keys = "q Quit  Tab Switch  → Data  ← Topics  ↑↓ Navigate  f Follow  c Clear";
+fn draw_footer(frame: &mut Frame, area: Rect, app: &App, ui: &UiState) {
+    let keys = if ui.mouse_capture {
+        "q Quit  Tab Switch  → Data  ← Topics  ↑↓ Navigate  f Follow  c Clear  m Mouse"
+    } else {
+        "m Mouse on  —  mouse capture released, drag to select and copy as usual"
+    };
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(
             app.status.chars().count() as u16 + 2,
         )])
         .split(area);
-    frame.render_widget(Paragraph::new(keys.fg(DIM)), layout[0]);
+    let key_style = if ui.mouse_capture {
+        Style::default().fg(DIM)
+    } else {
+        Style::default().fg(Color::Yellow)
+    };
+    frame.render_widget(Paragraph::new(Line::from(keys).style(key_style)), layout[0]);
     frame.render_widget(
         Paragraph::new(format!(" {} ", app.status).fg(Color::Black).bg(ACCENT)),
         layout[1],
@@ -630,13 +643,30 @@ fn draw_graph(frame: &mut Frame, area: Rect, topic: Option<&Topic>) {
 // ------------------------------------------------------------------- logs tab
 
 fn draw_logs(frame: &mut Frame, area: Rect, app: &App, ui: &mut UiState) {
-    let tz = app.tz;
+    // Borders take a column either side and a row top and bottom.
+    let width = area.width.saturating_sub(2);
     let view = area.height.saturating_sub(2) as usize;
-    ui.log_view = view;
+
+    // Following means the *tail* must be visible, and a wrapped entry can occupy several
+    // rows, so the first visible entry is found by walking back from the end until the
+    // viewport is full rather than by subtracting a fixed count.
     if ui.log_follow {
-        ui.log_offset = app.logs.len().saturating_sub(view);
+        let mut rows = 0usize;
+        let mut first = app.logs.len();
+        for (index, log) in app.logs.iter().enumerate().rev() {
+            let height = wrapped_height(&log_line(log, app.tz, false), width);
+            if rows + height > view && rows > 0 {
+                break;
+            }
+            rows += height;
+            first = index;
+            if rows >= view {
+                break;
+            }
+        }
+        ui.log_offset = first;
     }
-    let offset = ui.log_offset.min(app.logs.len().saturating_sub(view));
+    let offset = ui.log_offset.min(app.logs.len().saturating_sub(1));
     ui.log_offset = offset;
 
     let block = Block::bordered()
@@ -655,60 +685,82 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, ui: &mut UiState) {
     frame.render_widget(block, area);
     ui.hit.logs = inner;
 
-    let lines: Vec<Line> = app
-        .logs
-        .iter()
-        .skip(offset)
-        .take(view)
-        .enumerate()
-        .map(|(row, log)| {
-            let selected = ui.log_selected == Some(offset + row);
-            let (colour, level) = match log.level.as_deref() {
-                Some("ERROR") => (Color::Red, "ERROR"),
-                Some("WARN") => (Color::Yellow, "WARN "),
-                Some("INFO") => (Color::Green, "INFO "),
-                Some("DEBUG") => (Color::Blue, "DEBUG"),
-                Some("TRACE") => (DIM, "TRACE"),
-                _ => (DIM, "     "),
-            };
-            // Firmware without `defmt::timestamp!` has no device clock, so fall back
-            // to host arrival time, marked with `*` so the two are not confused.
-            let stamp = log.timestamp.clone().unwrap_or_else(|| {
-                let local = log.host_time.to_offset(tz);
-                format!(
-                    "{:02}:{:02}:{:02}.{:03}*",
-                    local.hour(),
-                    local.minute(),
-                    local.second(),
-                    local.millisecond()
-                )
-            });
-            let location = log
-                .location
-                .as_ref()
-                .map(|l| format!("  {l}"))
-                .unwrap_or_default();
+    let mut lines = Vec::new();
+    let mut rows = 0usize;
+    let mut shown = 0usize;
+    for (index, log) in app.logs.iter().enumerate().skip(offset) {
+        let line = log_line(log, app.tz, ui.log_selected == Some(index));
+        let height = wrapped_height(&line, width);
+        // Always show at least one entry, even if it alone overflows the pane.
+        if rows + height > view && rows > 0 {
+            break;
+        }
+        rows += height;
+        shown += 1;
+        lines.push(line);
+    }
+    // Scrolling and paging work in entries, not rows, so this is what input clamps to.
+    ui.log_view = shown.max(1);
 
-            if selected {
-                // Padded to the full width so the highlight reads as a solid row.
-                let text = format!("{stamp:<15}{level} {}{location}", log.message);
-                let pad = (inner.width as usize).saturating_sub(text.chars().count());
-                return Line::from(Span::styled(
-                    format!("{text}{}", " ".repeat(pad)),
-                    selection_style(true),
-                ));
-            }
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        inner,
+    );
+}
 
-            Line::from(vec![
-                Span::styled(format!("{stamp:<15}"), Style::default().fg(DIM)),
-                Span::styled(format!("{level} "), Style::default().fg(colour).bold()),
-                Span::styled(log.message.clone(), Style::default().fg(Color::White)),
-                Span::styled(location, Style::default().fg(DIM)),
-            ])
-        })
-        .collect();
+/// Renders one log entry. Selected entries are styled rather than padded to the pane
+/// width, because padding would itself wrap onto a row of its own.
+fn log_line(log: &LogLine, tz: UtcOffset, selected: bool) -> Line<'static> {
+    let (colour, level) = match log.level.as_deref() {
+        Some("ERROR") => (Color::Red, "ERROR"),
+        Some("WARN") => (Color::Yellow, "WARN "),
+        Some("INFO") => (Color::Green, "INFO "),
+        Some("DEBUG") => (Color::Blue, "DEBUG"),
+        Some("TRACE") => (DIM, "TRACE"),
+        _ => (DIM, "     "),
+    };
+    // Firmware without `defmt::timestamp!` has no device clock, so fall back to host
+    // arrival time, marked with `*` so the two are not confused.
+    let stamp = log.timestamp.clone().unwrap_or_else(|| {
+        let local = log.host_time.to_offset(tz);
+        format!(
+            "{:02}:{:02}:{:02}.{:03}*",
+            local.hour(),
+            local.minute(),
+            local.second(),
+            local.millisecond()
+        )
+    });
+    let location = log
+        .location
+        .as_ref()
+        .map(|l| format!("  {l}"))
+        .unwrap_or_default();
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    if selected {
+        let style = selection_style(true);
+        return Line::from(vec![
+            Span::styled(format!("{stamp:<15}"), style),
+            Span::styled(format!("{level} "), style),
+            Span::styled(log.message.clone(), style),
+            Span::styled(location, style),
+        ]);
+    }
+
+    Line::from(vec![
+        Span::styled(format!("{stamp:<15}"), Style::default().fg(DIM)),
+        Span::styled(format!("{level} "), Style::default().fg(colour).bold()),
+        Span::styled(log.message.clone(), Style::default().fg(Color::White)),
+        Span::styled(location, Style::default().fg(DIM)),
+    ])
+}
+
+/// Rows a log entry occupies once wrapped to `width`.
+fn wrapped_height(line: &Line<'static>, width: u16) -> usize {
+    Paragraph::new(line.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .max(1)
 }
 
 // -------------------------------------------------------------------- helpers
