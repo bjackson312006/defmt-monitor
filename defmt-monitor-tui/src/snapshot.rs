@@ -8,11 +8,12 @@ use time::UtcOffset;
 use crate::model::{App, Tab};
 use crate::source::{DecodedFrame, SourceEvent, route};
 use crate::ui::{self, Focus, UiState};
+use crate::{SAMPLE_RETENTION_DEFAULT, LOG_LINE_RETENTION_DEFAULT};
 
 /// Builds an app populated through the real routing path, so the snapshot exercises
 /// `parse_frame`, numeric detection and device-clock parsing rather than fake state.
 fn populated() -> App {
-    let mut app = App::new(UtcOffset::UTC, 2000, 5000);
+    let mut app = App::new(UtcOffset::UTC, SAMPLE_RETENTION_DEFAULT, LOG_LINE_RETENTION_DEFAULT);
     for tick in 0..120u64 {
         let ms = tick * 20;
         let stamp = format!("00:00:{:02}.{:03}", (ms / 1000) % 60, ms % 1000);
@@ -130,7 +131,7 @@ fn first_topic_is_selected_automatically() {
 /// held on that frame while the right-hand panes kept updating.
 #[test]
 fn tree_labels_track_the_latest_value() {
-    let mut app = App::new(UtcOffset::UTC, 2000, 5000);
+    let mut app = App::new(UtcOffset::UTC, SAMPLE_RETENTION_DEFAULT, LOG_LINE_RETENTION_DEFAULT);
     app.startup.ready();
     let mut ui = UiState::default();
 
@@ -438,7 +439,7 @@ fn clicking_a_history_row_selects_it() {
 /// `(done)` marker, the active one keeps ticking.
 #[test]
 fn startup_screen_lists_every_stage_with_its_own_timer() {
-    let mut app = App::new(UtcOffset::UTC, 2000, 5000);
+    let mut app = App::new(UtcOffset::UTC, SAMPLE_RETENTION_DEFAULT, LOG_LINE_RETENTION_DEFAULT);
     let mut ui = UiState::default();
 
     app.startup.begin("flashing".into());
@@ -461,7 +462,7 @@ fn startup_screen_lists_every_stage_with_its_own_timer() {
 /// phase actually took.
 #[test]
 fn finished_stage_timers_freeze() {
-    let mut app = App::new(UtcOffset::UTC, 2000, 5000);
+    let mut app = App::new(UtcOffset::UTC, SAMPLE_RETENTION_DEFAULT, LOG_LINE_RETENTION_DEFAULT);
     app.startup.begin("flashing".into());
     app.startup.begin("waiting for RTT".into());
 
@@ -482,7 +483,7 @@ fn finished_stage_timers_freeze() {
 /// the stages that already succeeded.
 #[test]
 fn startup_failure_shows_the_error_in_full() {
-    let mut app = App::new(UtcOffset::UTC, 2000, 5000);
+    let mut app = App::new(UtcOffset::UTC, SAMPLE_RETENTION_DEFAULT, LOG_LINE_RETENTION_DEFAULT);
     let mut ui = UiState::default();
 
     app.startup.begin("connecting to STM32F446RETx".into());
@@ -508,7 +509,7 @@ fn startup_failure_shows_the_error_in_full() {
 
 #[test]
 fn ready_replaces_the_loading_screen_with_the_panes() {
-    let mut app = App::new(UtcOffset::UTC, 2000, 5000);
+    let mut app = App::new(UtcOffset::UTC, SAMPLE_RETENTION_DEFAULT, LOG_LINE_RETENTION_DEFAULT);
     let mut ui = UiState::default();
 
     app.startup.begin("waiting for RTT".into());

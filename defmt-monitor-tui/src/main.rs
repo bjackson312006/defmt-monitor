@@ -25,6 +25,11 @@ use crate::model::App;
 use crate::source::SourceEvent;
 use crate::ui::UiState;
 
+/// Default value for sample retention (how many samples are retained per topic for the TUI history)
+pub const SAMPLE_RETENTION_DEFAULT: usize = 2000;
+/// Default value for log line retention (how many log lines are retained for the TUI history)
+pub const LOG_LINE_RETENTION_DEFAULT: usize = 5000;
+
 /// Terminal monitor for firmware values published with `defmt-monitor`.
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -45,11 +50,11 @@ struct Cli {
     channel: Option<usize>,
 
     /// Samples retained per topic.
-    #[arg(long, default_value_t = 2000)]
+    #[arg(long, default_value_t = SAMPLE_RETENTION_DEFAULT)]
     retention: usize,
 
     /// Log lines retained.
-    #[arg(long, default_value_t = 5000)]
+    #[arg(long, default_value_t = LOG_LINE_RETENTION_DEFAULT)]
     log_retention: usize,
 
     /// Run against synthetic data with no probe attached.
