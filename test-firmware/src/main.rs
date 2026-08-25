@@ -49,8 +49,8 @@ async fn main(_spawner: Spawner) {
         defmt_monitor::monitor!("Counters/Decreasing/Decreasing8x", "{=i32}", decreasing_8x);
 
         // this prints an ordinary defmt log every loop for the purposes of testing the logging page
-        if ticks % 50 == 0 {
-            defmt::info!("heartbeat: {} samples published", ticks);
+        if ticks % 10 == 0 {
+            defmt::info!("heartbeat! ticks={}", ticks);
         }
 
         increasing_1x += 1;
