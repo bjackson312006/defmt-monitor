@@ -1,6 +1,6 @@
 //! The probe-rs transport: flash (or attach), poll RTT, decode defmt, route frames.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -104,6 +104,10 @@ fn run(config: &Config, tx: &Sender<SourceEvent>) -> Result<()> {
 
     let _ = tx.send(SourceEvent::Ready(format!("attached (RTT channel {channel})")));
 
+    // Cargo runs a runner from the package directory, so this is the firmware's own
+    // root and is what source paths are made relative to.
+    let root = std::env::current_dir().ok();
+
     let mut stream = table.new_stream_decoder();
     let mut health = DecodeHealth::default();
     let mut buf = [0u8; 4096];
@@ -132,7 +136,9 @@ fn run(config: &Config, tx: &Sender<SourceEvent>) -> Result<()> {
             match stream.decode() {
                 Ok(frame) => {
                     health.record_ok();
-                    let location = locations.as_ref().and_then(|l| describe(l, frame.index()));
+                    let location = locations
+                        .as_ref()
+                        .and_then(|l| describe(l, frame.index(), root.as_deref()));
                     let event = route(DecodedFrame {
                         message: frame.display_message().to_string(),
                         timestamp: frame.display_timestamp().map(|t| t.to_string()),
@@ -191,18 +197,61 @@ impl DecodeHealth {
     }
 }
 
-fn describe(locations: &Locations, index: u64) -> Option<String> {
+fn describe(locations: &Locations, index: u64, root: Option<&Path>) -> Option<String> {
     let location = locations.get(&index)?;
-    Some(format!(
-        "{}:{}",
-        location.file.display(),
-        location.line
-    ))
+    let file = shorten(&location.file, root);
+    Some(format!("{}:{}", file.display(), location.line))
+}
+
+/// Trims a source path down to something worth putting in a log pane.
+///
+/// DWARF records absolute paths, so a frame from the firmware itself arrives as
+/// `/home/you/projects/thing/src/main.rs` — sixty characters of machine-specific noise
+/// crowding out the message. Paths under the project root become relative to it; anything
+/// else, typically a dependency in the cargo registry, keeps its last few components so
+/// the crate remains identifiable.
+fn shorten(path: &Path, root: Option<&Path>) -> PathBuf {
+    if let Some(relative) = root.and_then(|root| path.strip_prefix(root).ok()) {
+        return relative.to_path_buf();
+    }
+    let components: Vec<_> = path.components().collect();
+    let keep = components.len().saturating_sub(3);
+    components[keep..].iter().collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::DecodeHealth;
+    use super::{DecodeHealth, shorten};
+    use std::path::Path;
+
+    #[test]
+    fn firmware_paths_become_relative_to_the_project() {
+        assert_eq!(
+            shorten(
+                Path::new("/home/you/Repos/thing/test-firmware/src/main.rs"),
+                Some(Path::new("/home/you/Repos/thing/test-firmware")),
+            ),
+            Path::new("src/main.rs"),
+        );
+    }
+
+    #[test]
+    fn dependency_paths_keep_enough_to_identify_them() {
+        // Registry paths share no prefix with the project, so they are trimmed instead.
+        assert_eq!(
+            shorten(
+                Path::new("/home/you/.cargo/registry/src/index.crates.io-abc/embassy-time-0.5.1/src/lib.rs"),
+                Some(Path::new("/home/you/Repos/thing/test-firmware")),
+            ),
+            Path::new("embassy-time-0.5.1/src/lib.rs"),
+        );
+    }
+
+    #[test]
+    fn short_and_rootless_paths_survive_untouched() {
+        assert_eq!(shorten(Path::new("src/main.rs"), None), Path::new("src/main.rs"));
+        assert_eq!(shorten(Path::new("main.rs"), None), Path::new("main.rs"));
+    }
 
     #[test]
     fn a_few_malformed_frames_at_startup_are_tolerated() {
