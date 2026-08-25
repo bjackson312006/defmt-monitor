@@ -50,6 +50,11 @@ struct Cli {
     #[arg(long)]
     attach: bool,
 
+    /// Hold the reset line while connecting, for firmware that would otherwise be
+    /// unreachable (reconfigured SWD pins, low-power modes, an early fault).
+    #[arg(long)]
+    connect_under_reset: bool,
+
     /// RTT up-channel to read. Defaults to the channel named `defmt`, else 0.
     #[arg(long)]
     channel: Option<usize>,
@@ -108,6 +113,7 @@ fn spawn_probe(cli: &Cli, tx: mpsc::Sender<SourceEvent>) -> Result<()> {
             chip,
             attach_only: cli.attach,
             channel: cli.channel,
+            connect_under_reset: cli.connect_under_reset,
             poll_interval: Duration::from_millis(10),
         },
         tx,

@@ -9,7 +9,8 @@ use anyhow::{Context, Result, anyhow};
 use defmt_decoder::{DecodeError, Locations, Table};
 use probe_rs::flashing::{ElfLoader, ElfOptions, download_file};
 use probe_rs::rtt::Rtt;
-use probe_rs::{Session, SessionConfig};
+use probe_rs::probe::list::Lister;
+use probe_rs::{Permissions, Session, SessionConfig};
 
 use crate::source::{DecodedFrame, SourceEvent, route};
 
@@ -20,6 +21,8 @@ pub struct Config {
     pub attach_only: bool,
     /// RTT up-channel to read. Defaults to the channel named `defmt`, else channel 0.
     pub channel: Option<usize>,
+    /// Hold the hardware reset line while connecting to the debug interface.
+    pub connect_under_reset: bool,
     pub poll_interval: Duration,
 }
 
@@ -51,9 +54,16 @@ fn run(config: &Config, tx: &Sender<SourceEvent>) -> Result<()> {
         status("no defmt::timestamp! in firmware — graphs use host arrival time");
     }
 
-    stage(&format!("connecting to {}", config.chip));
-    let mut session = Session::auto_attach(config.chip.clone(), SessionConfig::default())
-        .with_context(|| format!("attaching to {}", config.chip))?;
+    stage(&format!(
+        "connecting to {}{}",
+        config.chip,
+        if config.connect_under_reset {
+            " under reset"
+        } else {
+            ""
+        }
+    ));
+    let mut session = open_session(config)?;
 
     if !config.attach_only {
         stage("flashing");
@@ -162,6 +172,31 @@ fn run(config: &Config, tx: &Sender<SourceEvent>) -> Result<()> {
             }
         }
     }
+}
+
+/// Opens a debug session, optionally holding the target in reset while connecting.
+///
+/// Connecting under reset is the escape hatch for firmware the debugger cannot otherwise
+/// interrupt — one that reconfigures the SWD pins, enters a low-power mode, or faults
+/// early in boot. Holding reset asserted means the debug interface is attached before any
+/// of that runs.
+fn open_session(config: &Config) -> Result<Session> {
+    if !config.connect_under_reset {
+        return Session::auto_attach(config.chip.clone(), SessionConfig::default())
+            .with_context(|| format!("attaching to {}", config.chip));
+    }
+
+    // `auto_attach` has no under-reset variant, so the probe is opened explicitly. This
+    // mirrors what it does: take the first probe found.
+    let lister = Lister::new();
+    let probes = lister.list_all();
+    let info = probes
+        .first()
+        .ok_or_else(|| anyhow!("no debug probe found"))?;
+    let probe = info.open().context("opening the debug probe")?;
+    probe
+        .attach_under_reset(config.chip.clone(), Permissions::default())
+        .with_context(|| format!("attaching to {} under reset", config.chip))
 }
 
 /// Distinguishes recoverable decode noise from a genuine firmware/ELF mismatch.
