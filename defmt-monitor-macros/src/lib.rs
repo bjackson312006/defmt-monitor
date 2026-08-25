@@ -13,6 +13,23 @@ use syn::{Expr, LitStr, Token};
 /// Must match `defmt_monitor::SENTINEL`.
 const SENTINEL: &str = "[MON1]";
 
+/// Compile-time switch. Unset means enabled.
+const ENABLE_VAR: &str = "DEFMT_MONITOR";
+
+/// Whether `monitor!` should emit anything.
+///
+/// Defaults to on, so that adding a `monitor!` call to a fresh project produces data
+/// without first having to discover an environment variable.
+fn enabled() -> bool {
+    match std::env::var(ENABLE_VAR) {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "off" | "0" | "false" | "no"
+        ),
+        Err(_) => true,
+    }
+}
+
 struct MonitorInput {
     topic: LitStr,
     spec: LitStr,
@@ -58,16 +75,35 @@ pub fn monitor(input: TokenStream) -> TokenStream {
         spec.span(),
     );
 
-    let args = args.iter();
-    let call = quote!(#fmt #(, #args)*);
+    let args: Vec<&Expr> = args.iter().collect();
 
-    // `defmt`'s macros expand to bare `defmt::export::*` paths, so they resolve against
-    // the *calling* crate's `defmt` dependency. Emitting `::defmt::` here keeps this
-    // crate agnostic to which defmt version the firmware uses.
-    let expanded = if cfg!(feature = "level-error") {
-        quote!(::defmt::error!(#call))
+    // Cargo does not track environment variables read by a proc macro, so the switch
+    // is also expanded into the generated code where *rustc* records it. Without this,
+    // flipping `DEFMT_MONITOR` would not trigger a rebuild.
+    let tracked = quote!(option_env!("DEFMT_MONITOR"););
+
+    let expanded = if enabled() {
+        // `println!` rather than `info!`: monitor samples are not a log level, and
+        // `println!` carries no level tag, so `DEFMT_LOG` cannot filter them away.
+        // It shares `info!`'s codegen otherwise, timestamp included.
+        //
+        // `defmt`'s macros expand to bare `defmt::export::*` paths, so they resolve
+        // against the *calling* crate's `defmt` dependency. Emitting `::defmt::` here
+        // keeps this crate agnostic to which defmt version the firmware uses.
+        quote!({
+            #tracked
+            ::defmt::println!(#fmt #(, #args)*)
+        })
     } else {
-        quote!(::defmt::info!(#call))
+        // Disabled: nothing is emitted and no string is interned into the ELF. The
+        // arguments are still name-resolved and type-checked so they cannot rot while
+        // monitoring is off, but the branch is never taken and optimises away.
+        quote!({
+            #tracked
+            if false {
+                let _ = (#(&#args,)*);
+            }
+        })
     };
     expanded.into()
 }

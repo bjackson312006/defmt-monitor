@@ -11,9 +11,9 @@
 //! defmt_monitor::monitor!("power/battery_mv", "{=u16}", battery_mv);
 //! ```
 //!
-//! Each call expands to a single ordinary `defmt::info!`, so monitor frames travel
-//! over whatever transport the application already configured (typically
-//! `defmt-rtt`) and require no extra setup.
+//! Each call expands to a single `defmt::println!`, so monitor frames travel over
+//! whatever transport the application already configured (typically `defmt-rtt`) and
+//! require no extra setup. Set `DEFMT_MONITOR=off` to compile them out entirely.
 //!
 //! Your crate must depend on `defmt` directly: `defmt`'s macros expand to bare
 //! `defmt::export::*` paths that resolve against the calling crate. In exchange,
@@ -38,24 +38,31 @@
 //! interned format string, the match is unaffected by the application's `defmt.toml`,
 //! `--log-format`, timestamp, or any other host-side display configuration.
 //!
-//! # Caveats
+//! # Turning it off
 //!
-//! **Your firmware must set `DEFMT_LOG`.** defmt's compile-time filter defaults to
-//! `ERROR` when the variable is unset, so a firmware that never sets it compiles away
-//! every `info!` — including every `monitor!` call — and the TUI shows an empty topic
-//! tree with no error at build or run time. The filter is keyed on the crate containing
-//! the call site, which is *your* crate, not this one, so `defmt-monitor` cannot set it
-//! for you.
+//! `monitor!` expands to `defmt::println!` rather than `defmt::info!`. Monitor samples
+//! are not a log level, and `println!` carries no level tag, so `DEFMT_LOG` cannot
+//! filter them away — firmware built with `DEFMT_LOG` unset still publishes. It shares
+//! `info!`'s codegen in every other respect, timestamp included.
 //!
-//! Either set it for your firmware, most conveniently in `.cargo/config.toml`:
+//! To compile the calls out entirely, set `DEFMT_MONITOR` to `off` (or `0`, `false`,
+//! `no`). Unset means enabled, so adding a `monitor!` call to a fresh project produces
+//! data without first having to discover this variable.
+//!
+//! When disabled nothing is emitted and no topic is interned, so a production build
+//! carries no trace of the monitor and a stock `probe-rs run` console stays clean:
 //!
 //! ```toml
+//! # .cargo/config.toml
 //! [env]
-//! DEFMT_LOG = "trace"
+//! DEFMT_MONITOR = "off"
 //! ```
 //!
-//! or enable the `level-error` feature, which emits at `error!` and so survives every
-//! filter short of `DEFMT_LOG=off`.
+//! Arguments are still name-resolved and type-checked when disabled, so they cannot rot
+//! unnoticed, but they are not checked against the format spec — that requires a build
+//! with monitoring on.
+//!
+//! # Caveats
 //!
 //! Monitor frames share one RTT ring buffer with the application's ordinary logs. At
 //! high sample rates they will start crowding out log messages, since `defmt-rtt` drops

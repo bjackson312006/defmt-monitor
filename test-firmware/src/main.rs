@@ -10,7 +10,6 @@
 #![no_std]
 #![no_main]
 
-use defmt_monitor::monitor;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 // Pulled in for their side effects: the defmt transport and the panic handler.
@@ -29,8 +28,8 @@ async fn main(_spawner: Spawner) {
     let mut ticks: u32 = 0;
 
     loop {
-        monitor!("Counters/Increasing", "{=i32}", increasing);
-        monitor!("Counters/Decreasing", "{=i32}", decreasing);
+        defmt_monitor::monitor!("Counters/Increasing", "{=i32}", increasing);
+        defmt_monitor::monitor!("Counters/Decreasing", "{=i32}", decreasing);
 
         // An ordinary log every few seconds, so the TUI's Logs tab has traffic to show
         // and it is visible that monitor frames are being kept out of it.

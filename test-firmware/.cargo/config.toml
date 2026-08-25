@@ -1,17 +1,27 @@
+# This config provides two commands for flashing/running:
+#
+# `cargo run`:      normal probe-rs run, with `defmt::monitor!()` calls disabled
+# `cargo monitor`   flashes with the defmt-monitor TUI, with `defmt::monitor!()` calls enabled
+
+[alias]
+monitor = [
+    "run",
+    "--config", "env.DEFMT_MONITOR='on'",
+    "--config", "target.thumbv7em-none-eabihf.runner='defmt-monitor-tui --chip STM32F446RETx'",
+]
+
 [env]
-# Required, not optional. defmt's compile-time filter defaults to ERROR when DEFMT_LOG
-# is unset, which silently compiles away every `info!` — including every `monitor!`
-# call, leaving the TUI with an empty topic tree and no error anywhere.
+# DEFMT_LOG doesn't affect defmt_monitor::monitor!() calls
 DEFMT_LOG = "trace"
+
+# turns off defmt_monitor::monitor!() macros by default since we have cargo monitor for that
+DEFMT_MONITOR = "off"
 
 [build]
 target = "thumbv7em-none-eabihf"
 
 [target.thumbv7em-none-eabihf]
-# `cargo run` flashes and streams logs the usual way. To watch the monitor topics
-# instead, run defmt-monitor-tui against the same ELF.
-#runner = "probe-rs run --chip STM32F446RETx"
-runner = "defmt-monitor-tui --chip STM32F446RETx"
+runner = "probe-rs run --chip STM32F446RETx"
 rustflags = [
     "-C", "link-arg=--nmagic",
     "-C", "link-arg=-Tlink.x",
