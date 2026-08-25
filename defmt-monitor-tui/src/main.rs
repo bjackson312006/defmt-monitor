@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture};
 use ratatui::crossterm::execute;
+use ratatui::layout::Rect;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -172,12 +173,19 @@ fn show_in_pager(terminal: &mut ratatui::DefaultTerminal, text: &str) -> Result<
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
         .context("returning to the alternate screen")?;
 
-    // Deliberately no `terminal.clear()`. The alternate screen keeps its contents while
-    // the pager runs on the normal screen, so ratatui's cached buffer still matches what
-    // is displayed and the next draw repaints only what changed. `clear()` would also
-    // round-trip a cursor-position query to the terminal and fail the whole session if
-    // no reply arrived.
-    let _ = terminal;
+    // A full repaint is required, not optional: pagers use the alternate screen too, so
+    // quitting one leaves it wiped while ratatui still believes its cached buffer matches
+    // the display. Without this the next draw updates only the cells that changed and the
+    // screen comes back in fragments.
+    //
+    // `resize` rather than `clear`: both clear the screen and reset the back buffer, but
+    // `clear` first round-trips a cursor-position query to the terminal purely so it can
+    // restore the cursor afterwards — something a fullscreen TUI does not care about, and
+    // which hangs then fails wherever nothing answers the query.
+    let size = terminal.size().context("reading the terminal size")?;
+    terminal
+        .resize(Rect::new(0, 0, size.width, size.height))
+        .context("repainting after the pager")?;
     Ok(())
 }
 
