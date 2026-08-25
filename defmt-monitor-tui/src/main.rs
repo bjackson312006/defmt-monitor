@@ -10,7 +10,8 @@ mod ui;
 #[cfg(feature = "probe")]
 mod probe;
 
-use std::io::stdout;
+use std::io::{Write, stdout};
+use std::process::{Command, Stdio};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
@@ -19,6 +20,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture};
 use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use time::UtcOffset;
 
 use crate::model::App;
@@ -124,17 +128,10 @@ fn run(
     // Done once only: after this the selection belongs to the user, and re-selecting
     // under them would fight their navigation.
     let mut bootstrapped = false;
-    // Mirrors the terminal's actual state so the escape sequence is only sent on change.
-    let mut mouse_capture = true;
 
     loop {
-        if ui.mouse_capture != mouse_capture {
-            if ui.mouse_capture {
-                execute!(stdout(), EnableMouseCapture)?;
-            } else {
-                execute!(stdout(), DisableMouseCapture)?;
-            }
-            mouse_capture = ui.mouse_capture;
+        if let Some(text) = ui.pager.take() {
+            show_in_pager(terminal, &text)?;
         }
 
         drain(rx, app);
@@ -149,6 +146,54 @@ fn run(
             return Ok(());
         }
     }
+}
+
+/// Leaves the TUI, shows `text` in the user's pager, and comes back.
+///
+/// The same terminal is reused rather than spawning a new one: there is no portable way
+/// to launch a terminal emulator, and it would fail over SSH. Leaving the alternate
+/// screen is what matters — the pager does not continuously redraw, so the terminal's own
+/// selection and copy behave normally.
+fn show_in_pager(terminal: &mut ratatui::DefaultTerminal, text: &str) -> Result<()> {
+    // Step out of the TUI in place. Replacing the terminal with a fresh `ratatui::init()`
+    // looks equivalent but is not: the old value is dropped *after* the new one is built,
+    // and its teardown then undoes the setup that just happened.
+    let _ = execute!(stdout(), DisableMouseCapture, LeaveAlternateScreen);
+    disable_raw_mode().context("leaving raw mode")?;
+
+    if let Err(error) = pipe_to_pager(text) {
+        // No pager available: plain output is still selectable, which is the whole point.
+        println!("{text}");
+        println!("({error}; press Enter to return)");
+        let _ = std::io::stdin().read_line(&mut String::new());
+    }
+
+    enable_raw_mode().context("re-entering raw mode")?;
+    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
+        .context("returning to the alternate screen")?;
+
+    // Deliberately no `terminal.clear()`. The alternate screen keeps its contents while
+    // the pager runs on the normal screen, so ratatui's cached buffer still matches what
+    // is displayed and the next draw repaints only what changed. `clear()` would also
+    // round-trip a cursor-position query to the terminal and fail the whole session if
+    // no reply arrived.
+    let _ = terminal;
+    Ok(())
+}
+
+fn pipe_to_pager(text: &str) -> Result<()> {
+    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
+    let mut child = Command::new(&pager)
+        .stdin(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("running {pager}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        // A pager quit early closes the pipe; that is not an error worth reporting.
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    child.wait().context("waiting for the pager")?;
+    Ok(())
 }
 
 /// Moves pending source events into the model.

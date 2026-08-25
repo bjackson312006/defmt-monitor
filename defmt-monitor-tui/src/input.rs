@@ -32,9 +32,17 @@ fn key_press(key: KeyEvent, app: &mut App, ui: &mut UiState) -> bool {
                 Tab::Logs => Tab::Monitor,
             };
         }
-        // Releasing mouse capture hands click-drag back to the terminal, which is the
-        // only way to use its native selection and copy.
-        KeyCode::Char('m') => ui.mouse_capture = !ui.mouse_capture,
+        // Hand the current view to the user's pager, outside the alternate screen,
+        // where the terminal's own selection and copy work normally.
+        KeyCode::Char('p') => {
+            ui.pager = Some(match app.tab {
+                Tab::Logs => app.logs_as_text(),
+                Tab::Monitor => ui
+                    .selected_path()
+                    .map(|path| app.topic_as_text(&path))
+                    .unwrap_or_default(),
+            });
+        }
         KeyCode::Char('f') => match app.tab {
             Tab::Monitor => {
                 ui.history_follow = !ui.history_follow;

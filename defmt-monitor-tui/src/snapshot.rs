@@ -555,24 +555,53 @@ fn long_log_entries_wrap_instead_of_truncating() {
     );
 }
 
-/// Releasing mouse capture is what gives the terminal its native selection back, so the
-/// key has to actually flip the flag the event loop watches.
+/// `p` hands the current view to the pager. The exported text must be complete and
+/// unwrapped, since the whole point is selecting a long error in one drag.
 #[test]
-fn m_toggles_mouse_capture() {
+fn p_exports_the_log_history_untruncated() {
     use ratatui::crossterm::event::KeyCode;
 
     let mut app = populated();
     let mut ui = UiState::default();
-    assert!(ui.mouse_capture, "capture is on by default");
+    app.tab = Tab::Logs;
 
-    press(KeyCode::Char('m'), &mut app, &mut ui);
-    assert!(!ui.mouse_capture);
-    let frame = render(&mut app, &mut ui);
-    assert!(
-        frame.contains("mouse capture released"),
-        "the footer must say why the mouse stopped working:\n{frame}"
-    );
+    let long = format!("i2c failed: {} END-OF-MESSAGE", "0xdeadbeef ".repeat(20));
+    if let SourceEvent::Log(line) = route(DecodedFrame {
+        message: long.clone(),
+        timestamp: Some("00:00:09.000".into()),
+        level: Some("ERROR".into()),
+        location: Some("src/imu.rs:118".into()),
+    }) {
+        app.push_log(*line);
+    }
 
-    press(KeyCode::Char('m'), &mut app, &mut ui);
-    assert!(ui.mouse_capture);
+    press(KeyCode::Char('p'), &mut app, &mut ui);
+    let text = ui.pager.take().expect("p should queue the export");
+
+    // Every entry, not just the visible ones.
+    assert_eq!(text.lines().count(), app.logs.len());
+    // The long entry survives on a single line, however narrow the pane happened to be.
+    let entry = text.lines().find(|l| l.contains("i2c failed")).expect("entry present");
+    assert!(entry.ends_with("src/imu.rs:118"), "entry was cut short: {entry}");
+    assert!(entry.contains("END-OF-MESSAGE"));
+    assert!(text.contains("i2c transaction"), "earlier history is missing");
+}
+
+/// On the Monitor tab the same key exports the selected topic's samples instead.
+#[test]
+fn p_exports_the_selected_topic_on_the_monitor_tab() {
+    use ratatui::crossterm::event::KeyCode;
+
+    let mut app = populated();
+    let mut ui = UiState::default();
+    ui.select_first_topic(&app);
+    render(&mut app, &mut ui);
+
+    press(KeyCode::Char('p'), &mut app, &mut ui);
+    let text = ui.pager.take().expect("p should queue the export");
+
+    assert!(text.starts_with("imu/accel/x"), "should be headed by the topic: {text:.40}");
+    assert!(text.contains("120 samples"));
+    // One header line plus every retained sample.
+    assert_eq!(text.lines().count(), 1 + 120);
 }

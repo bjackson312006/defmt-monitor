@@ -54,9 +54,9 @@ pub struct UiState {
     pub log_view: usize,
     pub log_follow: bool,
     pub hit: Hit,
-    /// When false, mouse capture is released so the terminal's own click-drag selection
-    /// works. Applied by the event loop, which owns the terminal.
-    pub mouse_capture: bool,
+    /// Text waiting to be shown in the user's pager. The event loop owns the terminal,
+    /// so it performs the handover and clears this.
+    pub pager: Option<String>,
 }
 
 impl Default for UiState {
@@ -75,7 +75,7 @@ impl Default for UiState {
             log_view: 0,
             log_follow: true,
             hit: Hit::default(),
-            mouse_capture: true,
+            pager: None,
         }
     }
 }
@@ -127,7 +127,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, ui: &mut UiState) {
         Tab::Monitor => draw_monitor(frame, chunks[2], app, ui),
         Tab::Logs => draw_logs(frame, chunks[2], app, ui),
     }
-    draw_footer(frame, chunks[3], app, ui);
+    draw_footer(frame, chunks[3], app);
 }
 
 /// The centred loading screen shown until the source reports itself ready.
@@ -269,24 +269,15 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App, ui: &UiState) {
     );
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, app: &App, ui: &UiState) {
-    let keys = if ui.mouse_capture {
-        "q Quit  Tab Switch  → Data  ← Topics  ↑↓ Navigate  f Follow  c Clear  m Mouse"
-    } else {
-        "m Mouse on  —  mouse capture released, drag to select and copy as usual"
-    };
+fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+    let keys = "q Quit  Tab Switch  → Data  ← Topics  ↑↓ Navigate  f Follow  c Clear  p Copy";
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(
             app.status.chars().count() as u16 + 2,
         )])
         .split(area);
-    let key_style = if ui.mouse_capture {
-        Style::default().fg(DIM)
-    } else {
-        Style::default().fg(Color::Yellow)
-    };
-    frame.render_widget(Paragraph::new(Line::from(keys).style(key_style)), layout[0]);
+    frame.render_widget(Paragraph::new(keys.fg(DIM)), layout[0]);
     frame.render_widget(
         Paragraph::new(format!(" {} ", app.status).fg(Color::Black).bg(ACCENT)),
         layout[1],

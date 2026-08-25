@@ -286,6 +286,58 @@ impl App {
         self.topics.values().map(|t| t.total).sum()
     }
 
+    /// The whole log buffer as plain text, for handing to a pager.
+    ///
+    /// Untruncated and unwrapped: the pane's width does not constrain this, so a long
+    /// error comes out on one line and can be selected in one drag.
+    pub fn logs_as_text(&self) -> String {
+        self.logs
+            .iter()
+            .map(|log| {
+                let stamp = log.timestamp.clone().unwrap_or_else(|| {
+                    let local = log.host_time.to_offset(self.tz);
+                    format!(
+                        "{:02}:{:02}:{:02}.{:03}*",
+                        local.hour(),
+                        local.minute(),
+                        local.second(),
+                        local.millisecond()
+                    )
+                });
+                format!(
+                    "{stamp:<15} {:<5} {}{}\n",
+                    log.level.clone().unwrap_or_default(),
+                    log.message,
+                    log.location
+                        .as_ref()
+                        .map(|l| format!("  {l}"))
+                        .unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    /// One topic's retained samples as plain text.
+    pub fn topic_as_text(&self, path: &str) -> String {
+        let Some(topic) = self.topics.get(path) else {
+            return String::new();
+        };
+        let mut out = format!("{}  ({} samples)\n", topic.path, topic.total);
+        for sample in &topic.history {
+            let local = sample.host_time.to_offset(self.tz);
+            out.push_str(&format!(
+                "{:02}:{:02}:{:02}.{:03}  {:<16} {}\n",
+                local.hour(),
+                local.minute(),
+                local.second(),
+                local.millisecond(),
+                sample.device_time_raw.clone().unwrap_or_else(|| "-".into()),
+                sample.value,
+            ));
+        }
+        out
+    }
+
     /// Topics under a tree path, i.e. those whose segments start with `prefix`.
     pub fn descendants<'a>(&'a self, prefix: &'a [String]) -> impl Iterator<Item = &'a Topic> {
         self.topics.values().filter(move |topic| {
