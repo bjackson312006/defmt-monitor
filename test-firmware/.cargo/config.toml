@@ -7,7 +7,7 @@
 monitor = [
     "run",
     "--config", "env.DEFMT_MONITOR='on'",
-    "--config", "target.thumbv7em-none-eabihf.runner='defmt-monitor-tui --chip STM32F446RETx'",
+    "--config", "target.thumbv7em-none-eabihf.runner='./.scripts/run.sh monitor'",
 ]
 
 [env]
@@ -16,12 +16,15 @@ DEFMT_LOG = "trace"
 
 # turns off defmt_monitor::monitor!() macros by default since we have cargo monitor for that
 DEFMT_MONITOR = "off"
+# firmware target
+FIRMWARE_CHIP = "STM32F446RETx"
 
 [build]
 target = "thumbv7em-none-eabihf"
 
 [target.thumbv7em-none-eabihf]
-runner = "probe-rs run --chip STM32F446RETx"
+# Checks the required tool is installed before handing over. See .scripts/run.sh.
+runner = "./.scripts/run.sh console"
 rustflags = [
     "-C", "link-arg=--nmagic",
     "-C", "link-arg=-Tlink.x",
