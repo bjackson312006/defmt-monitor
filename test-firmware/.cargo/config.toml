@@ -19,6 +19,11 @@ DEFMT_MONITOR = "off"
 # firmware target
 FIRMWARE_CHIP = "STM32F446RETx"
 
+# Use the git CLI rather than cargo's built-in client, so `cargo install --git` picks up
+# your SSH keys and credential helpers. Required while the repository is private.
+[net]
+git-fetch-with-cli = true
+
 [build]
 target = "thumbv7em-none-eabihf"
 
