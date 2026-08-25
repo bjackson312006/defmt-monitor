@@ -6,26 +6,18 @@
 #
 # Cargo appends the built ELF as the final argument when this is used in `cargo run`. so that's how that works
 #
-# It checks that the tool for the requested mode is installed, offers to install it
-# when run interactively, and then hands over to it. Cargo gives the runner a real
-# terminal on all three streams, so the prompt works and `cargo install` progress is
-# visible as it happens.
+# If `console` is passed in, this will run via probe-rs. If `monitor` is passed in, this will run via defmt-monitor-tui.
+# If the respective tool isn't installed, this will prompt you to download it via `cargo install` (will be compiled on your host).
 
 set -eu
 
-# SSH, not HTTPS: the repository is private, and cargo's built-in git client cannot
-# authenticate over HTTPS without a credential helper. Paired with
-# `net.git-fetch-with-cli` in .cargo/config.toml, cargo shells out to the git CLI and
-# picks up your normal SSH setup.
+# The repo for defmt-monitor. If you don't have git ssh set up this will probably not work i think
 REPO="ssh://git@github.com/bjackson312006/defmt-monitor.git"
 
 # This needs to be defined once in .cargo/config.toml's [env] table. Cargo passes that through to this script.
 CHIP="${FIRMWARE_CHIP:?FIRMWARE_CHIP is not set; see .cargo/config.toml}"
 
-# This script runs as a cargo runner, so the firmware's `[build] target` is in force.
-# Without an explicit host triple, `cargo install` below would try to cross-compile
-# these host tools to bare-metal ARM and fail deep inside serde with "can't find crate
-# for `std`".
+# This finds the host platform in case it needs to compile host tooling
 HOST="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')" || HOST=""
 [ -n "$HOST" ] || {
     echo "run.sh: could not determine the host triple; is rustc on PATH?" >&2
