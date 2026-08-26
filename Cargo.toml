@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["defmt-monitor", "defmt-monitor-macros", "defmt-monitor-tui"]
+members = ["defmt-monitor", "defmt-monitor-macros", "defmt-monitor-tui", "macro-tests"]
 # Cross-compiled firmware: its own workspace, so its target and linker flags stay out
 # of the host crates. Build it from inside test-firmware/.
 exclude = ["test-firmware"]

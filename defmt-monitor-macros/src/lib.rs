@@ -6,7 +6,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Expr, LitStr, Token};
+use syn::{Expr, Lit, LitStr, Token, bracketed};
+use proc_macro2::Span;
 
 /// Prefix identifying a monitor frame, and the version of the wire format.
 ///
@@ -30,18 +31,91 @@ fn enabled() -> bool {
     }
 }
 
+/// A topic or description: either a single string literal, or a bracketed list of
+/// literals concatenated at compile time.
+///
+/// The bracketed form exists so callers can build topics inside their own
+/// `macro_rules!` wrappers, where a `$name:literal` metavariable stands in for one
+/// segment. Everything must be a literal, because the result is interned into the ELF
+/// rather than assembled at runtime.
+struct Composed {
+    value: String,
+    span: Span,
+}
+
+impl Parse for Composed {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        if !input.peek(syn::token::Bracket) {
+            let literal = input.parse::<LitStr>()?;
+            return Ok(Self {
+                value: literal.value(),
+                span: literal.span(),
+            });
+        }
+
+        let content;
+        let bracket = bracketed!(content in input);
+        let parts = Punctuated::<Lit, Token![,]>::parse_terminated(&content).map_err(|e| {
+            syn::Error::new(
+                e.span(),
+                "expected a literal; the parts of a topic are concatenated at compile time, \
+                 so constants, variables and expressions cannot be used here",
+            )
+        })?;
+        if parts.is_empty() {
+            return Err(syn::Error::new(
+                bracket.span.join(),
+                "expected at least one literal between the brackets",
+            ));
+        }
+
+        let mut value = String::new();
+        for part in &parts {
+            value.push_str(&literal_text(part)?);
+        }
+        Ok(Self {
+            value,
+            span: bracket.span.join(),
+        })
+    }
+}
+
+/// Renders a literal as it would be written, for concatenation.
+fn literal_text(literal: &Lit) -> syn::Result<String> {
+    Ok(match literal {
+        Lit::Str(value) => value.value(),
+        Lit::Int(value) => value.base10_digits().to_string(),
+        Lit::Float(value) => value.base10_digits().to_string(),
+        Lit::Char(value) => value.value().to_string(),
+        Lit::Bool(value) => value.value().to_string(),
+        other => {
+            return Err(syn::Error::new(
+                other.span(),
+                "a topic part must be a string, integer, float, character or boolean literal",
+            ));
+        }
+    })
+}
+
 struct MonitorInput {
-    topic: LitStr,
-    /// Optional `desc = "..."` written straight after the topic.
-    description: Option<LitStr>,
+    topic: Composed,
+    /// Optional `desc = ...` written straight after the topic.
+    description: Option<Composed>,
     spec: LitStr,
     args: Punctuated<Expr, Token![,]>,
 }
 
 impl Parse for MonitorInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let topic = input.parse::<LitStr>().map_err(|e| {
-            syn::Error::new(e.span(), "expected a string literal topic, e.g. \"imu/accel/x\"")
+        let topic = input.parse::<Composed>().map_err(|e| {
+            syn::Error::new(
+                e.span(),
+                format!(
+                    "expected a topic: either a string literal such as \"imu/accel/x\", \
+                     or a bracketed list of literals to concatenate, such as \
+                     [\"imu/accel/\", 3]. ({e})"
+                ),
+            )
         })?;
         input.parse::<Token![,]>()?;
 
@@ -55,8 +129,11 @@ impl Parse for MonitorInput {
                 ));
             }
             input.parse::<Token![=]>()?;
-            let value = input.parse::<LitStr>().map_err(|e| {
-                syn::Error::new(e.span(), "a monitor description must be a string literal")
+            let value = input.parse::<Composed>().map_err(|e| {
+                syn::Error::new(
+                    e.span(),
+                    format!("a monitor description must be a string literal, or a bracketed list of literals. ({e})"),
+                )
             })?;
             input.parse::<Token![,]>()?;
             Some(value)
@@ -94,16 +171,19 @@ pub fn monitor(input: TokenStream) -> TokenStream {
         args,
     } = syn::parse_macro_input!(input as MonitorInput);
 
-    let topic_value = topic.value();
+    let topic_value = topic.value.clone();
     if let Err(msg) = validate_field(&topic_value, "topic") {
-        return syn::Error::new(topic.span(), msg).to_compile_error().into();
+        return syn::Error::new(topic.span, msg).to_compile_error().into();
     }
 
-    let description_value = description.as_ref().map(LitStr::value).unwrap_or_default();
-    if let Some(literal) = &description
+    let description_value = description
+        .as_ref()
+        .map(|d| d.value.clone())
+        .unwrap_or_default();
+    if let Some(described) = &description
         && let Err(msg) = validate_field(&description_value, "description")
     {
-        return syn::Error::new(literal.span(), msg).to_compile_error().into();
+        return syn::Error::new(described.span, msg).to_compile_error().into();
     }
 
     // Build the defmt format string here so that defmt's own proc macro receives a

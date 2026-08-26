@@ -8,8 +8,29 @@
 //! ```ignore
 //! defmt_monitor::monitor!("imu/accel/x", "{=f32}", accel.x);
 //! defmt_monitor::monitor!("imu/accel/y", "{=f32}", accel.y);
-//! defmt_monitor::monitor!("power/battery_mv", "{=u16}", battery_mv);
+//! defmt_monitor::monitor!("power/battery_mv", desc = "pack voltage", "{=u16}", mv);
 //! ```
+//!
+//! A topic may also be written as a bracketed list of literals, concatenated at compile
+//! time. This is for building topics inside your own `macro_rules!` wrapper, where one
+//! segment arrives as a metavariable:
+//!
+//! ```ignore
+//! macro_rules! chip_diagnostic {
+//!     ($chip:literal, $line:expr) => {
+//!         defmt_monitor::monitor!(
+//!             ["diagnostics/chip", $chip, "/line"],
+//!             "{=u8}",
+//!             $line
+//!         );
+//!     };
+//! }
+//! ```
+//!
+//! Every part must be a literal — string, integer, float, character or boolean. The
+//! result is interned into the ELF, so it cannot depend on a constant, a variable or any
+//! other expression whose value the compiler does not have at macro expansion. The same
+//! form works for `desc`.
 //!
 //! Each call expands to a single `defmt::println!`, so monitor frames travel over
 //! whatever transport the application already configured (typically `defmt-rtt`) and

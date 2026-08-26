@@ -1,0 +1,16 @@
+[package]
+name = "macro-tests"
+description = "Compile-time coverage for the monitor! macro's accepted syntax"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# There is nothing to run: compiling *is* the assertion. Without this, cargo would build
+# a test harness binary, which would fail to link for want of a defmt global logger.
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+defmt = { workspace = true }
+defmt-monitor = { workspace = true }
