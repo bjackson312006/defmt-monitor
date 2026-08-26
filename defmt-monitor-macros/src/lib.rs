@@ -11,7 +11,7 @@ use syn::{Expr, LitStr, Token};
 /// Prefix identifying a monitor frame, and the version of the wire format.
 ///
 /// Must match `defmt_monitor::SENTINEL`.
-const SENTINEL: &str = "[MON1]";
+const SENTINEL: &str = "[MON2]";
 
 /// Compile-time switch. Unset means enabled.
 const ENABLE_VAR: &str = "DEFMT_MONITOR";
@@ -32,6 +32,8 @@ fn enabled() -> bool {
 
 struct MonitorInput {
     topic: LitStr,
+    /// Optional `desc = "..."` written straight after the topic.
+    description: Option<LitStr>,
     spec: LitStr,
     args: Punctuated<Expr, Token![,]>,
 }
@@ -42,6 +44,26 @@ impl Parse for MonitorInput {
             syn::Error::new(e.span(), "expected a string literal topic, e.g. \"imu/accel/x\"")
         })?;
         input.parse::<Token![,]>()?;
+
+        // `desc = "..."` is optional, so it is only consumed when actually present.
+        let description = if input.peek(syn::Ident) && input.peek2(Token![=]) {
+            let name = input.parse::<syn::Ident>()?;
+            if name != "desc" {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!("expected `desc = \"...\"`, found `{name}`"),
+                ));
+            }
+            input.parse::<Token![=]>()?;
+            let value = input.parse::<LitStr>().map_err(|e| {
+                syn::Error::new(e.span(), "a monitor description must be a string literal")
+            })?;
+            input.parse::<Token![,]>()?;
+            Some(value)
+        } else {
+            None
+        };
+
         let spec = input.parse::<LitStr>().map_err(|e| {
             syn::Error::new(e.span(), "expected a defmt format string literal, e.g. \"{=f32}\"")
         })?;
@@ -53,25 +75,47 @@ impl Parse for MonitorInput {
             Punctuated::new()
         };
 
-        Ok(MonitorInput { topic, spec, args })
+        Ok(MonitorInput {
+            topic,
+            description,
+            spec,
+            args,
+        })
     }
 }
 
 /// Implementation of `defmt_monitor::monitor!`.
 #[proc_macro]
 pub fn monitor(input: TokenStream) -> TokenStream {
-    let MonitorInput { topic, spec, args } = syn::parse_macro_input!(input as MonitorInput);
+    let MonitorInput {
+        topic,
+        description,
+        spec,
+        args,
+    } = syn::parse_macro_input!(input as MonitorInput);
 
     let topic_value = topic.value();
-    if let Err(msg) = validate_topic(&topic_value) {
+    if let Err(msg) = validate_field(&topic_value, "topic") {
         return syn::Error::new(topic.span(), msg).to_compile_error().into();
     }
 
+    let description_value = description.as_ref().map(LitStr::value).unwrap_or_default();
+    if let Some(literal) = &description
+        && let Err(msg) = validate_field(&description_value, "description")
+    {
+        return syn::Error::new(literal.span(), msg).to_compile_error().into();
+    }
+
     // Build the defmt format string here so that defmt's own proc macro receives a
-    // genuine string literal token. The topic is therefore interned into the ELF's
-    // `.defmt` section at compile time and costs zero bytes on the wire.
+    // genuine string literal token. Topic and description are therefore interned into
+    // the ELF's `.defmt` section at compile time and cost zero bytes on the wire, however
+    // long they are. An omitted description leaves an empty slot rather than no slot, so
+    // the layout is fixed and needs no guessing to parse.
     let fmt = LitStr::new(
-        &format!("{SENTINEL}[{topic_value}][{}]", spec.value()),
+        &format!(
+            "{SENTINEL}[{topic_value}][{description_value}][{}]",
+            spec.value()
+        ),
         spec.span(),
     );
 
@@ -108,17 +152,19 @@ pub fn monitor(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 
-/// Rejects topics that would make the emitted format string ambiguous to parse, or
-/// that defmt would misinterpret as containing format arguments.
-fn validate_topic(topic: &str) -> Result<(), String> {
-    if topic.is_empty() {
+/// Rejects topics and descriptions that would make the emitted format string ambiguous
+/// to parse, or that defmt would misinterpret as containing format arguments.
+///
+/// Only the value, which comes last, may contain brackets.
+fn validate_field(value: &str, field: &str) -> Result<(), String> {
+    if field == "topic" && value.is_empty() {
         return Err("monitor topic must not be empty".to_string());
     }
     for c in ['[', ']', '{', '}'] {
-        if topic.contains(c) {
+        if value.contains(c) {
             return Err(format!(
-                "monitor topic must not contain `{c}`; it would make the frame ambiguous \
-                 to the host parser. Use `/` to separate topic segments."
+                "monitor {field} must not contain `{c}`; it would make the frame ambiguous \
+                 to the host parser."
             ));
         }
     }

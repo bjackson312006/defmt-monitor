@@ -12,7 +12,11 @@ use crate::model::{LogLine, Sample, parse_device_time, parse_numeric};
 /// Anything a source can tell the UI.
 #[derive(Debug)]
 pub enum SourceEvent {
-    Sample { path: String, sample: Sample },
+    Sample {
+        path: String,
+        description: String,
+        sample: Sample,
+    },
     Log(Box<LogLine>),
     /// A startup phase has begun. The previous one is complete, freezing its timer.
     Stage(String),
@@ -45,10 +49,11 @@ pub struct DecodedFrame {
 pub fn route(frame: DecodedFrame) -> SourceEvent {
     let host_time = OffsetDateTime::now_utc();
 
-    if let Some((path, value)) = defmt_monitor::parse_frame(&frame.message) {
+    if let Some((path, description, value)) = defmt_monitor::parse_frame(&frame.message) {
         let device_time = frame.timestamp.as_deref().and_then(parse_device_time);
         return SourceEvent::Sample {
             path: path.to_string(),
+            description: description.to_string(),
             sample: Sample {
                 host_time,
                 device_time,
@@ -59,11 +64,22 @@ pub fn route(frame: DecodedFrame) -> SourceEvent {
         };
     }
 
+    // A frame from firmware built against an older wire format would otherwise be
+    // listed as ordinary log output, leaving no clue why its topic never appears.
+    let message = if defmt_monitor::is_legacy_frame(&frame.message) {
+        format!(
+            "{} <- older defmt-monitor wire format; rebuild the firmware",
+            frame.message
+        )
+    } else {
+        frame.message
+    };
+
     SourceEvent::Log(Box::new(LogLine {
         host_time,
         timestamp: frame.timestamp,
         level: frame.level,
-        message: frame.message,
+        message,
         location: frame.location,
     }))
 }
@@ -109,25 +125,25 @@ pub fn spawn_demo(tx: Sender<SourceEvent>) {
                 }));
             };
 
-            emit(format!("[MON1][imu/accel/x][{:.3}]", (t * 1.7).sin() * 2.0));
-            emit(format!("[MON1][imu/accel/y][{:.3}]", (t * 0.9).cos() * 1.5));
-            emit(format!("[MON1][imu/accel/z][{:.3}]", 9.81 + next() * 0.1));
+            emit(format!("[MON2][imu/accel/x][lateral g][{:.3}]", (t * 1.7).sin() * 2.0));
+            emit(format!("[MON2][imu/accel/y][longitudinal g][{:.3}]", (t * 0.9).cos() * 1.5));
+            emit(format!("[MON2][imu/accel/z][vertical g][{:.3}]", 9.81 + next() * 0.1));
 
             if tick.is_multiple_of(5) {
                 battery += (next() - 0.5) * 8.0;
                 battery = battery.clamp(3200.0, 4200.0);
-                emit(format!("[MON1][power/battery_mv][{}]", battery as u32));
+                emit(format!("[MON2][power/battery_mv][pack voltage][{}]", battery as u32));
                 // Not graphable: a derived `Format` enum renders as text.
                 let state = match (tick / 100) % 3 {
                     0 => "Idle".to_string(),
                     1 => format!("Charging {{ mv: {} }}", battery as u32),
                     _ => "Fault(3)".to_string(),
                 };
-                emit(format!("[MON1][power/state][{state}]"));
-                emit(format!("[MON1][sys/ready][{}]", tick % 200 < 100));
+                emit(format!("[MON2][power/state][charger state machine][{state}]"));
+                emit(format!("[MON2][sys/ready][][{}]", tick % 200 < 100));
             }
             if tick.is_multiple_of(25) {
-                emit(format!("[MON1][sys/uptime_ms][{ms}]"));
+                emit(format!("[MON2][sys/uptime_ms][since boot][{ms}]"));
             }
 
             // Ordinary log traffic, which must land on the Logs tab rather than the tree.
@@ -167,9 +183,14 @@ mod tests {
 
     #[test]
     fn monitor_frames_become_samples() {
-        match route(frame("[MON1][imu/accel/x][1.023]")) {
-            SourceEvent::Sample { path, sample } => {
+        match route(frame("[MON2][imu/accel/x][lateral g][1.023]")) {
+            SourceEvent::Sample {
+                path,
+                description,
+                sample,
+            } => {
                 assert_eq!(path, "imu/accel/x");
+                assert_eq!(description, "lateral g");
                 assert_eq!(sample.value, "1.023");
                 assert_eq!(sample.numeric, Some(1.023));
                 assert_eq!(sample.device_time, Some(1.5));
@@ -180,8 +201,8 @@ mod tests {
 
     #[test]
     fn non_numeric_samples_keep_their_rendering() {
-        match route(frame("[MON1][power/state][Charging { mv: 3700 }]")) {
-            SourceEvent::Sample { path, sample } => {
+        match route(frame("[MON2][power/state][][Charging { mv: 3700 }]")) {
+            SourceEvent::Sample { path, sample, .. } => {
                 assert_eq!(path, "power/state");
                 assert_eq!(sample.value, "Charging { mv: 3700 }");
                 assert_eq!(sample.numeric, None);

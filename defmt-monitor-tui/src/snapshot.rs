@@ -26,17 +26,21 @@ fn populated() -> App {
                 level: Some("INFO".into()),
                 location: Some("src/sensor.rs:118".into()),
             }) {
-                SourceEvent::Sample { path, sample } => app.push_sample(&path, sample),
+                SourceEvent::Sample {
+                    path,
+                    description,
+                    sample,
+                } => app.push_sample(&path, &description, sample),
                 SourceEvent::Log(line) => app.push_log(*line),
                 _ => {}
             }
         };
 
-        feed(format!("[MON1][imu/accel/x][{:.3}]", (t * 1.7).sin() * 2.0));
-        feed(format!("[MON1][imu/accel/y][{:.3}]", (t * 0.9).cos() * 1.5));
-        feed(format!("[MON1][power/battery_mv][{}]", 3700 + tick % 17));
-        feed("[MON1][power/state][Charging { mv: 3711 }]".to_string());
-        feed(format!("[MON1][sys/ready][{}]", tick % 40 < 20));
+        feed(format!("[MON2][imu/accel/x][lateral g][{:.3}]", (t * 1.7).sin() * 2.0));
+        feed(format!("[MON2][imu/accel/y][][{:.3}]", (t * 0.9).cos() * 1.5));
+        feed(format!("[MON2][power/battery_mv][pack voltage][{}]", 3700 + tick % 17));
+        feed("[MON2][power/state][][Charging { mv: 3711 }]".to_string());
+        feed(format!("[MON2][sys/ready][][{}]", tick % 40 < 20));
         if tick % 20 == 0 {
             feed(format!("i2c transaction {} ok", tick / 20));
         }
@@ -136,13 +140,17 @@ fn tree_labels_track_the_latest_value() {
     let mut ui = UiState::default();
 
     let feed = |app: &mut App, value: i32| {
-        if let SourceEvent::Sample { path, sample } = route(DecodedFrame {
-            message: format!("[MON1][Counters/Decreasing][{value}]"),
+        if let SourceEvent::Sample {
+            path,
+            description,
+            sample,
+        } = route(DecodedFrame {
+            message: format!("[MON2][Counters/Decreasing][][{value}]"),
             timestamp: Some("00:00:01.000".into()),
             level: Some("INFO".into()),
             location: None,
         }) {
-            app.push_sample(&path, sample);
+            app.push_sample(&path, &description, sample);
         }
     };
 
@@ -604,4 +612,91 @@ fn p_exports_the_selected_topic_on_the_monitor_tab() {
     assert!(text.contains("120 samples"));
     // One header line plus every retained sample.
     assert_eq!(text.lines().count(), 1 + 120);
+}
+
+/// A description declared at the `monitor!` call site should reach the value pane, and
+/// its absence should not leave a gap.
+#[test]
+fn topic_descriptions_are_shown_when_present() {
+    let mut app = populated();
+    let mut ui = UiState::default();
+
+    // `imu/accel/x` was fed with a description, `imu/accel/y` without one.
+    select(&mut ui, &["imu", "accel", "x"]);
+    let frame = render(&mut app, &mut ui);
+    assert!(frame.contains("lateral g"), "description missing:\n{frame}");
+
+    select(&mut ui, &["imu", "accel", "y"]);
+    let frame = render(&mut app, &mut ui);
+    assert!(!frame.contains("lateral g"), "description leaked across topics");
+    assert!(frame.contains("Value"), "value pane still renders without one");
+}
+
+/// Frames from firmware built against the previous wire format must be called out
+/// rather than quietly listed as ordinary log output.
+#[test]
+fn legacy_frames_are_flagged_rather_than_silently_logged() {
+    match route(DecodedFrame {
+        message: "[MON1][imu/accel/x][1.023]".into(),
+        timestamp: None,
+        level: None,
+        location: None,
+    }) {
+        SourceEvent::Log(line) => assert!(
+            line.message.contains("rebuild the firmware"),
+            "expected an explanation, got: {}",
+            line.message
+        ),
+        other => panic!("expected a log line, got {other:?}"),
+    }
+}
+
+/// A description wider than its column must wrap rather than being clipped, and must
+/// never run into the statistics beside it.
+#[test]
+fn long_descriptions_wrap_within_the_value_pane() {
+    let mut app = App::new(UtcOffset::UTC, 2000, 5000);
+    app.startup.ready();
+    let mut ui = UiState::default();
+
+    let description = "increments once per period very very very very very very very \
+                       very very long description that cannot fit on a single line";
+    if let SourceEvent::Sample {
+        path,
+        description,
+        sample,
+    } = route(DecodedFrame {
+        message: format!("[MON2][Counters/Increasing][{description}][92]"),
+        timestamp: Some("00:00:09.000".into()),
+        level: None,
+        location: None,
+    }) {
+        app.push_sample(&path, &description, sample);
+    }
+    ui.select_first_topic(&app);
+
+    let frame = render(&mut app, &mut ui);
+    println!("\n=== Long description ===\n{frame}");
+
+    // The tail of the description survives, so nothing was clipped away.
+    assert!(
+        frame.contains("cannot fit on a single line"),
+        "description was truncated:\n{frame}"
+    );
+    // It occupies more than one row.
+    let rows = frame
+        .lines()
+        .filter(|line| line.contains("very") || line.contains("cannot fit"))
+        .count();
+    assert!(rows >= 2, "expected the description to wrap, got {rows} row(s):\n{frame}");
+    // And no row jams the description straight into the statistics column.
+    for line in frame.lines() {
+        assert!(
+            !line.contains("verynumeric") && !line.contains("verymin"),
+            "description collides with the stats column:\n{line}"
+        );
+    }
+    // Growing the pane must not crowd out the panes that matter more.
+    assert!(frame.contains("History ("), "history pane was squeezed out:\n{frame}");
+    assert!(frame.contains("Graph"), "graph pane was squeezed out:\n{frame}");
 }

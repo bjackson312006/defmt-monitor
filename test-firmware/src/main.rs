@@ -36,8 +36,7 @@ async fn main(_spawner: Spawner) {
     let mut ticks: u32 = 0;
 
     loop {
-        // increasing
-        defmt_monitor::monitor!("Counters/Increasing/Increasing1x", "{=i32}", increasing_1x);
+        defmt_monitor::monitor!("Counters/Increasing/Increasing1x", desc = "increments once per period very very very very very very very very very very very long description", "{=i32}", increasing_1x);
         defmt_monitor::monitor!("Counters/Increasing/Increasing2x", "{=i32}", increasing_2x);
         defmt_monitor::monitor!("Counters/Increasing/Increasing4x", "{=i32}", increasing_4x);
         defmt_monitor::monitor!("Counters/Increasing/Increasing8x", "{=i32}", increasing_8x);

@@ -30,8 +30,12 @@
 //! The interned string has the shape:
 //!
 //! ```text
-//! [MON1][<topic>][<value format spec>]
+//! [MON2][<topic>][<description>][<value format spec>]
 //! ```
+//!
+//! The description slot is always present and is empty when none was given, so the
+//! layout is fixed and needs no guessing to parse. Only the value, which comes last,
+//! may contain brackets.
 //!
 //! A host decodes frames normally (it needs the ELF either way) and routes them by
 //! testing each frame with [`parse_frame`]. Because the sentinel and topic live in the
@@ -88,12 +92,13 @@ pub use defmt_monitor_macros::monitor;
 
 /// Prefix identifying a monitor frame, and the version of the wire format.
 ///
-/// Bump this if the shape of the interned string ever changes, so that a host can
-/// recognise — and refuse — frames from firmware it does not understand.
-pub const SENTINEL: &str = "[MON1]";
+/// Bumped when the shape of the interned string changes, so a host can recognise — and
+/// refuse — frames from firmware it does not understand. `MON2` added the description
+/// slot; [`is_legacy_frame`] detects the older layout.
+pub const SENTINEL: &str = "[MON2]";
 
-/// Splits a monitor frame into its topic and payload, or returns [`None`] if it is not
-/// a monitor frame. This is the host side's entire routing decision.
+/// Splits a monitor frame into its topic, description and payload, or returns [`None`]
+/// if it is not a monitor frame. This is the host side's entire routing decision.
 ///
 /// The same function serves both inputs a host has available, because `monitor!` gives
 /// the format string and the rendered message an identical shape:
@@ -108,19 +113,36 @@ pub const SENTINEL: &str = "[MON1]";
 /// use defmt_monitor::parse_frame;
 ///
 /// // Format string: payload is the spec.
-/// assert_eq!(parse_frame("[MON1][imu/accel/x][{=f32}]"), Some(("imu/accel/x", "{=f32}")));
+/// assert_eq!(
+///     parse_frame("[MON2][imu/accel/x][lateral g][{=f32}]"),
+///     Some(("imu/accel/x", "lateral g", "{=f32}")),
+/// );
 /// // Rendered message: payload is the value.
-/// assert_eq!(parse_frame("[MON1][imu/accel/x][1.023]"), Some(("imu/accel/x", "1.023")));
+/// assert_eq!(
+///     parse_frame("[MON2][imu/accel/x][lateral g][1.023]"),
+///     Some(("imu/accel/x", "lateral g", "1.023")),
+/// );
+/// // No description given.
+/// assert_eq!(parse_frame("[MON2][uptime][][42]"), Some(("uptime", "", "42")));
 /// // Not a monitor frame.
 /// assert_eq!(parse_frame("spawning task {=str}"), None);
 /// ```
-pub fn parse_frame(frame: &str) -> Option<(&str, &str)> {
+pub fn parse_frame(frame: &str) -> Option<(&str, &str, &str)> {
     let rest = frame.strip_prefix(SENTINEL)?.strip_prefix('[')?;
-    // A topic cannot contain `]`, so the first `][` is always the delimiter, even when
-    // the payload itself contains brackets.
+    // Neither topic nor description may contain `]`, so each `][` in turn is
+    // unambiguously the next delimiter — even when the payload contains brackets.
     let (topic, rest) = rest.split_once("][")?;
+    let (description, rest) = rest.split_once("][")?;
     let payload = rest.strip_suffix(']')?;
-    Some((topic, payload))
+    Some((topic, description, payload))
+}
+
+/// Whether this is a monitor frame from firmware built against an older wire format.
+///
+/// Such frames cannot be parsed, and a host is better off saying so than silently
+/// listing them as ordinary log output.
+pub fn is_legacy_frame(frame: &str) -> bool {
+    frame.starts_with("[MON1][")
 }
 
 #[cfg(test)]
@@ -128,37 +150,58 @@ mod tests {
     use super::parse_frame as parse;
 
     #[test]
-    fn splits_topic_and_spec() {
-        assert_eq!(parse("[MON1][imu/accel/x][{=f32}]"), Some(("imu/accel/x", "{=f32}")));
-        assert_eq!(parse("[MON1][flat][{}]"), Some(("flat", "{}")));
+    fn splits_topic_description_and_spec() {
+        assert_eq!(
+            parse("[MON2][imu/accel/x][lateral g][{=f32}]"),
+            Some(("imu/accel/x", "lateral g", "{=f32}")),
+        );
+        assert_eq!(parse("[MON2][flat][][{}]"), Some(("flat", "", "{}")));
     }
 
     #[test]
     fn spec_may_contain_delimiters() {
         // A multi-argument spec can itself contain `][` and a trailing `]`.
-        assert_eq!(parse("[MON1][a/b][{=u8}][{=u8}]"), Some(("a/b", "{=u8}][{=u8}")));
+        assert_eq!(
+            parse("[MON2][a/b][][{=u8}][{=u8}]"),
+            Some(("a/b", "", "{=u8}][{=u8}")),
+        );
     }
 
     #[test]
     fn parses_rendered_messages_too() {
-        assert_eq!(parse("[MON1][imu/accel/x][1.023]"), Some(("imu/accel/x", "1.023")));
+        assert_eq!(
+            parse("[MON2][imu/accel/x][lateral g][1.023]"),
+            Some(("imu/accel/x", "lateral g", "1.023")),
+        );
         // A derived `Format` enum renders with braces and spaces.
         assert_eq!(
-            parse("[MON1][power/state][Charging { mv: 3700 }]"),
-            Some(("power/state", "Charging { mv: 3700 }")),
+            parse("[MON2][power/state][][Charging { mv: 3700 }]"),
+            Some(("power/state", "", "Charging { mv: 3700 }")),
         );
         // A slice payload contains brackets on both ends.
-        assert_eq!(parse("[MON1][adc/buf][[1, 2, 3]]"), Some(("adc/buf", "[1, 2, 3]")));
+        assert_eq!(
+            parse("[MON2][adc/buf][raw samples][[1, 2, 3]]"),
+            Some(("adc/buf", "raw samples", "[1, 2, 3]")),
+        );
     }
 
     #[test]
     fn rejects_non_monitor_frames() {
         assert_eq!(parse(""), None);
-        assert_eq!(parse("[MON1]"), None);
-        assert_eq!(parse("[MON1][no-spec]"), None);
-        assert_eq!(parse("[MON9][a][{}]"), None);
+        assert_eq!(parse("[MON2]"), None);
+        assert_eq!(parse("[MON2][no-spec]"), None);
+        // Three slots is the old layout, which no longer parses.
+        assert_eq!(parse("[MON2][a][{}]"), None);
+        assert_eq!(parse("[MON9][a][][{}]"), None);
         assert_eq!(parse("received {=u8} bytes"), None);
         // Trailing `]` is required, so a truncated string does not parse.
-        assert_eq!(parse("[MON1][a][{=f32}"), None);
+        assert_eq!(parse("[MON2][a][][{=f32}"), None);
+    }
+
+    #[test]
+    fn recognises_frames_from_older_firmware() {
+        assert!(super::is_legacy_frame("[MON1][imu/accel/x][{=f32}]"));
+        assert!(!super::is_legacy_frame("[MON2][imu/accel/x][][{=f32}]"));
+        assert!(!super::is_legacy_frame("spawning task 3"));
     }
 }

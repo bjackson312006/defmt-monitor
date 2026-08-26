@@ -216,7 +216,11 @@ fn pipe_to_pager(text: &str) -> Result<()> {
 fn drain(rx: &mpsc::Receiver<SourceEvent>, app: &mut App) {
     for _ in 0..10_000 {
         match rx.try_recv() {
-            Ok(SourceEvent::Sample { path, sample }) => app.push_sample(&path, sample),
+            Ok(SourceEvent::Sample {
+                path,
+                description,
+                sample,
+            }) => app.push_sample(&path, &description, sample),
             Ok(SourceEvent::Log(line)) => app.push_log(*line),
             Ok(SourceEvent::Stage(label)) => app.startup.begin(label),
             Ok(SourceEvent::Ready(status)) => {

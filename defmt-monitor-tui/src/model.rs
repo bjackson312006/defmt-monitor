@@ -51,6 +51,8 @@ pub struct Stats {
 #[derive(Debug)]
 pub struct Topic {
     pub path: String,
+    /// Optional one-line description declared at the `monitor!` call site.
+    pub description: String,
     pub history: VecDeque<Sample>,
     /// Total ever received, which outruns `history.len()` once retention kicks in.
     pub total: u64,
@@ -58,9 +60,10 @@ pub struct Topic {
 }
 
 impl Topic {
-    fn new(path: String, retention: usize) -> Self {
+    fn new(path: String, description: String, retention: usize) -> Self {
         Self {
             path,
+            description,
             history: VecDeque::new(),
             total: 0,
             retention,
@@ -263,11 +266,11 @@ impl App {
         }
     }
 
-    pub fn push_sample(&mut self, path: &str, sample: Sample) {
+    pub fn push_sample(&mut self, path: &str, description: &str, sample: Sample) {
         if !self.topics.contains_key(path) {
             self.topics.insert(
                 path.to_string(),
-                Topic::new(path.to_string(), self.retention),
+                Topic::new(path.to_string(), description.to_string(), self.retention),
             );
         }
         // Just inserted above when absent.
@@ -322,7 +325,14 @@ impl App {
         let Some(topic) = self.topics.get(path) else {
             return String::new();
         };
-        let mut out = format!("{}  ({} samples)\n", topic.path, topic.total);
+        let mut out = if topic.description.is_empty() {
+            format!("{}  ({} samples)\n", topic.path, topic.total)
+        } else {
+            format!(
+                "{}  \u{2014} {}  ({} samples)\n",
+                topic.path, topic.description, topic.total
+            )
+        };
         for sample in &topic.history {
             let local = sample.host_time.to_offset(self.tz);
             out.push_str(&format!(

@@ -294,16 +294,16 @@ fn draw_monitor(frame: &mut Frame, area: Rect, app: &mut App, ui: &mut UiState) 
 
     draw_tree(frame, columns[0], app, ui);
 
+    let topic = ui.selected_path().and_then(|p| app.topics.get(&p));
+
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),      // value + stats
+            Constraint::Length(value_pane_height(topic, columns[1].width, area.height)),
             Constraint::Percentage(45), // history
             Constraint::Min(6),         // graph
         ])
         .split(columns[1]);
-
-    let topic = ui.selected_path().and_then(|p| app.topics.get(&p));
     draw_value(frame, rows[0], topic);
     draw_history(frame, rows[1], topic, ui, app.tz);
     draw_graph(frame, rows[2], topic);
@@ -432,17 +432,26 @@ fn draw_value(frame: &mut Frame, area: Rect, topic: Option<&Topic>) {
         return;
     };
 
+    // A gap between the columns, so a description that fills its width does not run
+    // straight into the statistics.
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .spacing(2)
         .split(inner);
 
-    let left = vec![
+    let mut left = vec![
         Line::from(latest.value.clone().fg(Color::White).bold()),
         Line::from(""),
         Line::from(format!("{} samples", topic.total).fg(DIM)),
     ];
-    frame.render_widget(Paragraph::new(left), columns[0]);
+    if !topic.description.is_empty() {
+        left.push(Line::from(topic.description.clone().fg(Color::Cyan)));
+    }
+    frame.render_widget(
+        Paragraph::new(left).wrap(Wrap { trim: false }),
+        columns[0],
+    );
 
     let right = if let Some(stats) = topic.stats() {
         vec![
@@ -466,6 +475,26 @@ fn draw_value(frame: &mut Frame, area: Rect, topic: Option<&Topic>) {
         ]
     };
     frame.render_widget(Paragraph::new(right), columns[1]);
+}
+
+/// Height for the value pane, grown so a long description is not cut off.
+///
+/// The description wraps within the left column, so its line count depends on the width
+/// available there — which is why this is computed rather than fixed.
+fn value_pane_height(topic: Option<&Topic>, width: u16, available: u16) -> u16 {
+    /// Borders, the value, a blank line, and the sample count.
+    const BASE: u16 = 8;
+
+    let Some(topic) = topic.filter(|t| !t.description.is_empty()) else {
+        return BASE;
+    };
+    // Half the pane, less the borders and the inter-column gap.
+    let text_width = (width.saturating_sub(2) / 2).saturating_sub(2).max(1);
+    let lines = wrapped_height(&Line::from(topic.description.clone()), text_width) as u16;
+
+    // Never more than half the screen: the graph and history matter more than prose.
+    let ceiling = (available / 2).max(BASE);
+    (5 + lines).clamp(BASE, ceiling)
 }
 
 fn stat_line(label: &str, value: String) -> Line<'static> {
