@@ -35,7 +35,21 @@ async fn main(_spawner: Spawner) {
 
     let mut ticks: u32 = 0;
 
+    // stuff for testing that macro can concatenate literals
+    const LITERAL_VALUES: [i32; 2] = [192, -932];
+    macro_rules! test_literals {
+        ($chip:literal) => {
+            defmt_monitor::monitor!(
+                ["TestingLiterals/", $chip, "/val"],
+                desc = "testing that literals can be passed into topic names correctly",
+                "{=i32}",
+                LITERAL_VALUES[$chip],
+            );
+        };
+    }
+
     loop {
+        // increasing
         defmt_monitor::monitor!("Counters/Increasing/Increasing1x", desc = "increments once per period very very very very very very very very very very very long description", "{=i32}", increasing_1x);
         defmt_monitor::monitor!("Counters/Increasing/Increasing2x", "{=i32}", increasing_2x);
         defmt_monitor::monitor!("Counters/Increasing/Increasing4x", "{=i32}", increasing_4x);
@@ -46,6 +60,10 @@ async fn main(_spawner: Spawner) {
         defmt_monitor::monitor!("Counters/Decreasing/Decreasing2x", "{=i32}", decreasing_2x);
         defmt_monitor::monitor!("Counters/Decreasing/Decreasing4x", "{=i32}", decreasing_4x);
         defmt_monitor::monitor!("Counters/Decreasing/Decreasing8x", "{=i32}", decreasing_8x);
+
+        // literal expansion tests
+        test_literals!(0);
+        test_literals!(1);
 
         // this prints an ordinary defmt log every loop for the purposes of testing the logging page
         if ticks % 10 == 0 {
